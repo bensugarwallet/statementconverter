@@ -602,6 +602,10 @@ class NZBankStatementParser(BaseStatementParser):
         anz_indicators = ['BP', 'TFR', 'DD', 'DC', 'AP', 'ATM', 'POS', 'VT', 'EFTPOS', 'DEPOSIT', 'CREDIT', 'DEBIT']
         has_anz_indicator = any(f' {indicator} ' in f' {line} ' for indicator in anz_indicators)
         
+        # ASB-specific transaction indicators
+        asb_indicators = ['W&I Benefit', 'MB Transfer', 'Card', 'Unarranged Overdraft', 'Opening Balance', 'Banzpay', 'FC01', 'FC12', 'DR.Int']
+        has_asb_indicator = any(indicator in line for indicator in asb_indicators)
+        
         # Westpac-specific transaction indicators
         westpac_indicators = ['DE', 'DC', 'BP', 'PS', 'CR', 'TFR', 'WBC']
         has_westpac_indicator = any(f' {indicator} ' in f' {line} ' for indicator in westpac_indicators)
@@ -615,7 +619,7 @@ class NZBankStatementParser(BaseStatementParser):
         has_bnz_indicator = any(f' {indicator} ' in f' {line} ' for indicator in bnz_indicators)
         
         # Return true if the line has a date and either an amount or a bank-specific indicator
-        return has_amount or has_anz_indicator or has_westpac_indicator or has_kiwibank_indicator or has_bnz_indicator
+        return has_amount or has_anz_indicator or has_asb_indicator or has_westpac_indicator or has_kiwibank_indicator or has_bnz_indicator
     
     def _is_end_of_transactions(self, line: str) -> bool:
         """
@@ -664,8 +668,16 @@ class NZBankStatementParser(BaseStatementParser):
             re.compile(r'fees\s+summary', re.IGNORECASE)
         ]
         
+        # ASB-specific patterns
+        asb_patterns = [
+            re.compile(r'balance\s+summary', re.IGNORECASE),
+            re.compile(r'total\s+withdrawals', re.IGNORECASE),
+            re.compile(r'total\s+deposits', re.IGNORECASE),
+            re.compile(r'closing\s+balance', re.IGNORECASE)
+        ]
+        
         # Combine all patterns
-        all_patterns = end_patterns + anz_patterns + westpac_patterns + kiwibank_patterns + bnz_patterns
+        all_patterns = end_patterns + anz_patterns + asb_patterns + westpac_patterns + kiwibank_patterns + bnz_patterns
         
         return any(pattern.search(line) for pattern in all_patterns)
     
@@ -696,6 +708,10 @@ class NZBankStatementParser(BaseStatementParser):
         anz_opening_match = re.search(r'Opening balance', line, re.IGNORECASE)
         anz_merchant_match = re.search(r'(\d{2}/\d{2})\s+([^\d]+)\s+(\d{2}/\d{2})?', line)
         
+        # ASB-specific parsing
+        asb_transaction_match = re.search(r'(W&I Benefit|MB Transfer|Card|FC01|FC12|DR\.Int)\s+([^\d]+)(?:\s+([\d\.,]+))?', line)
+        asb_card_match = re.search(r'Card\s+(\d+)\s+([^\d]+)', line)
+        
         # Westpac-specific parsing
         westpac_transaction_match = re.search(r'\b(DE|DC|BP|PS|CR)\s+([^\d]+)(?:\s+([\d\.,]+))?', line)
         westpac_name_match = re.search(r'\b(WBC|Transfer|Internet|Bill|Payment)\s+([^\d]+)(?:\s+([\d\.,]+))?', line)
@@ -708,7 +724,7 @@ class NZBankStatementParser(BaseStatementParser):
         bnz_transaction_match = re.search(r'\b(AP|IB|PS|DD|DC|LR|EFTPOS)\s+([^\d]+)(?:\s+([\d\.,]+))?', line)
         
         # Determine transaction type and amount from context
-        is_credit = any(kw in line.lower() for kw in ['payment received', 'deposit', 'credit', 'refund', 'opening balance', 'money in', 'direct credit'])
+        is_credit = any(kw in line.lower() for kw in ['payment received', 'deposit', 'credit', 'refund', 'opening balance', 'money in', 'direct credit', 'w&i benefit'])
         
         # Also check if the word 'deposit' is in the line
         if 'deposit' in line.lower():
@@ -809,8 +825,20 @@ class NZBankStatementParser(BaseStatementParser):
         description = ''
         
         # Try bank-specific patterns first for more accurate descriptions
+        # ASB transaction patterns
+        if asb_transaction_match:
+            tx_type = asb_transaction_match.group(1)
+            tx_description = asb_transaction_match.group(2)
+            if tx_description:
+                description = f"{tx_type} {tx_description.strip()}"
+        # ASB card transaction
+        elif asb_card_match:
+            card_num = asb_card_match.group(1)
+            merchant = asb_card_match.group(2)
+            if merchant:
+                description = f"Card {card_num} {merchant.strip()}"
         # ANZ transaction patterns
-        if anz_transaction_match:
+        elif anz_transaction_match:
             tx_code = anz_transaction_match.group(1)
             tx_description = anz_transaction_match.group(2)
             if tx_description:
