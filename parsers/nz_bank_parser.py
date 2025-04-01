@@ -603,8 +603,8 @@ class NZBankStatementParser(BaseStatementParser):
         has_anz_indicator = any(f' {indicator} ' in f' {line} ' for indicator in anz_indicators)
         
         # ASB-specific transaction indicators
-        asb_indicators = ['W&I Benefit', 'MB Transfer', 'Card', 'Unarranged Overdraft', 'Opening Balance', 'Banzpay', 'FC01', 'FC12', 'DR.Int']
-        has_asb_indicator = any(indicator in line for indicator in asb_indicators)
+        asb_indicators = ['W&I Benefit', 'MB Transfer', 'Card', 'Unarranged Overdraft', 'Opening Balance', 'Banzpay', 'FC01', 'FC12', 'DR.Int', 'Transfer To', 'Transfer From', 'Savings', 'Interest', 'Withdrawal', 'Deposit', 'ATM', 'EFTPOS', 'Payment', 'BANK CHARGES', 'Account fee', 'Automatic Payment']
+        has_asb_indicator = any(indicator.lower() in line.lower() for indicator in asb_indicators)
         
         # Westpac-specific transaction indicators
         westpac_indicators = ['DE', 'DC', 'BP', 'PS', 'CR', 'TFR', 'WBC']
@@ -709,8 +709,9 @@ class NZBankStatementParser(BaseStatementParser):
         anz_merchant_match = re.search(r'(\d{2}/\d{2})\s+([^\d]+)\s+(\d{2}/\d{2})?', line)
         
         # ASB-specific parsing
-        asb_transaction_match = re.search(r'(W&I Benefit|MB Transfer|Card|FC01|FC12|DR\.Int)\s+([^\d]+)(?:\s+([\d\.,]+))?', line)
+        asb_transaction_match = re.search(r'(W&I Benefit|MB Transfer|Card|FC01|FC12|DR\.Int|Transfer (?:To|From)|Automatic Payment|Account fee|BANK CHARGES)\s+([^\d]+)(?:\s+([\d\.,]+))?', line, re.IGNORECASE)
         asb_card_match = re.search(r'Card\s+(\d+)\s+([^\d]+)', line)
+        asb_date_transaction_match = re.search(r'(\d{1,2}/\d{1,2}(?:/\d{2,4})?)\s+([^\d$]+)\s+(?:([\d,]+\.\d{2}))?', line)
         
         # Westpac-specific parsing
         westpac_transaction_match = re.search(r'\b(DE|DC|BP|PS|CR)\s+([^\d]+)(?:\s+([\d\.,]+))?', line)
@@ -724,7 +725,7 @@ class NZBankStatementParser(BaseStatementParser):
         bnz_transaction_match = re.search(r'\b(AP|IB|PS|DD|DC|LR|EFTPOS)\s+([^\d]+)(?:\s+([\d\.,]+))?', line)
         
         # Determine transaction type and amount from context
-        is_credit = any(kw in line.lower() for kw in ['payment received', 'deposit', 'credit', 'refund', 'opening balance', 'money in', 'direct credit', 'w&i benefit'])
+        is_credit = any(kw in line.lower() for kw in ['payment received', 'deposit', 'credit', 'refund', 'opening balance', 'money in', 'direct credit', 'w&i benefit', 'transfer from', 'interest paid'])
         
         # Also check if the word 'deposit' is in the line
         if 'deposit' in line.lower():
@@ -755,6 +756,16 @@ class NZBankStatementParser(BaseStatementParser):
             if 'DIRECT CREDIT' in tx_type:
                 is_credit = True
         
+        # ASB-specific
+        if not is_credit:
+            # Check for deposit column in ASB statements
+            deposit_column_match = re.search(r'\b(?:Deposit|Deposits)\s+\$', line, re.IGNORECASE)
+            if deposit_column_match:
+                is_credit = True
+            # Check for specific ASB credit indicators
+            elif 'transfer from' in line.lower() or 'interest paid' in line.lower():
+                is_credit = True
+            
         # BNZ-specific
         if not is_credit and bnz_transaction_match:
             tx_code = bnz_transaction_match.group(1)
@@ -837,6 +848,11 @@ class NZBankStatementParser(BaseStatementParser):
             merchant = asb_card_match.group(2)
             if merchant:
                 description = f"Card {card_num} {merchant.strip()}"
+        # ASB date-transaction pattern (common format in ASB statements)
+        elif asb_date_transaction_match:
+            tx_description = asb_date_transaction_match.group(2)
+            if tx_description:
+                description = tx_description.strip()
         # ANZ transaction patterns
         elif anz_transaction_match:
             tx_code = anz_transaction_match.group(1)
